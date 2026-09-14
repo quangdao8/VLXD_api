@@ -185,7 +185,7 @@ export class SalesService {
       });
 
       return sale;
-    });
+    }, { maxWait: 15_000, timeout: 30_000 });
   }
 
   async findAll(q: QuerySaleDto) {
@@ -279,6 +279,6 @@ export class SalesService {
       });
 
       return cancelled;
-    });
+    }, { maxWait: 15_000, timeout: 30_000 });
   }
 }

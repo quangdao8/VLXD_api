@@ -135,7 +135,7 @@ export class PaymentsService {
       });
 
       return payment;
-    });
+    }, { maxWait: 15_000, timeout: 30_000 });
   }
 
   async findAll(q: QueryPaymentDto) {
