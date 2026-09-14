@@ -35,10 +35,13 @@ export class PrismaExceptionFilter implements ExceptionFilter {
           message: 'Vi phạm ràng buộc khóa ngoại',
         });
       default:
+        // eslint-disable-next-line no-console
+        console.error('Prisma error', exception.code, exception.message);
         return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
           statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
           error: 'Database Error',
           message: 'Lỗi cơ sở dữ liệu',
+          code: exception.code,
         });
     }
   }
