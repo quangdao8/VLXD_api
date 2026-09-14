@@ -1,0 +1,257 @@
+// VLXD Sales — schema PostgreSQL (Neon).
+// Quy ước: mọi số tiền = BigInt (số nguyên đồng VND). KHÔNG dùng float cho tiền.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled (pgbouncer) cho runtime
+  directUrl = env("DIRECT_URL") // direct cho migrate
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  SALE
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SaleStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  OTHER
+}
+
+enum LedgerEntryType {
+  SALE // bán hàng -> tăng nợ (debit)
+  PAYMENT // thu tiền -> giảm nợ (credit)
+  CANCEL // hủy đơn -> đảo nợ
+  ADJUSTMENT // điều chỉnh tay
+}
+
+model User {
+  id           String       @id @default(uuid()) @db.Uuid
+  fullName     String
+  phone        String?
+  username     String       @unique
+  passwordHash String
+  role         Role         @default(SALE)
+  status       RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  sales         Sale[]
+  payments      Payment[]
+  ledgerEntries CustomerLedger[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model Customer {
+  id          String       @id @default(uuid()) @db.Uuid
+  code        String       @unique
+  name        String
+  phone       String?
+  address     String?
+  note        String?
+  currentDebt BigInt       @default(0) // denormalized; cập nhật trong transaction
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  sales         Sale[]
+  payments      Payment[]
+  ledgerEntries CustomerLedger[]
+
+  @@index([name])
+  @@index([phone])
+  @@map("customers")
+}
+
+model Category {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id           String       @id @default(uuid()) @db.Uuid
+  code         String       @unique
+  name         String
+  unit         String // đơn vị tính: bao, cây, viên, m3...
+  categoryId   String?      @db.Uuid
+  costPrice    BigInt? // giá vốn (tham chiếu, optional)
+  defaultPrice BigInt       @default(0)
+  description  String?
+  status       RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  category       Category?       @relation(fields: [categoryId], references: [id])
+  saleItems      SaleItem[]
+  priceListItems PriceListItem[]
+
+  @@index([categoryId])
+  @@index([name])
+  @@map("products")
+}
+
+model PriceList {
+  id            String       @id @default(uuid()) @db.Uuid
+  name          String
+  isActive      Boolean      @default(true)
+  effectiveFrom DateTime?
+  status        RecordStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  items PriceListItem[]
+
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  priceListId String   @db.Uuid
+  productId   String   @db.Uuid
+  price       BigInt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@unique([priceListId, productId])
+  @@index([productId])
+  @@map("price_list_items")
+}
+
+model Sale {
+  id              String        @id @default(uuid()) @db.Uuid
+  code            String        @unique
+  customerId      String        @db.Uuid
+  createdById     String        @db.Uuid
+  saleDate        DateTime      @default(now())
+  subtotal        BigInt        @default(0)
+  discount        BigInt        @default(0)
+  totalAmount     BigInt        @default(0) // backend tính, không tin client
+  paidAmount      BigInt        @default(0)
+  debtAmount      BigInt        @default(0) // total - paid
+  paymentStatus   PaymentStatus @default(UNPAID)
+  status          SaleStatus    @default(ACTIVE)
+  note            String?
+  clientRequestId String?       @unique // idempotency chống double-submit
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  customer  Customer   @relation(fields: [customerId], references: [id])
+  createdBy User       @relation(fields: [createdById], references: [id])
+  items     SaleItem[]
+  payments  Payment[]
+
+  @@index([customerId, saleDate])
+  @@index([saleDate])
+  @@index([status])
+  @@map("sales")
+}
+
+model SaleItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  saleId      String  @db.Uuid
+  productId   String  @db.Uuid
+  productName String // SNAPSHOT tại thời điểm bán
+  unit        String // SNAPSHOT
+  quantity    Decimal @db.Decimal(15, 3)
+  unitPrice   BigInt // SNAPSHOT
+  lineTotal   BigInt
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+  @@map("sale_items")
+}
+
+model Payment {
+  id              String        @id @default(uuid()) @db.Uuid
+  code            String        @unique
+  customerId      String        @db.Uuid
+  saleId          String?       @db.Uuid // optional: thu cho 1 đơn cụ thể
+  amount          BigInt
+  method          PaymentMethod @default(CASH)
+  paidAt          DateTime      @default(now())
+  createdById     String        @db.Uuid
+  note            String?
+  clientRequestId String?       @unique
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  customer  Customer @relation(fields: [customerId], references: [id])
+  sale      Sale?    @relation(fields: [saleId], references: [id])
+  createdBy User     @relation(fields: [createdById], references: [id])
+
+  @@index([customerId, paidAt])
+  @@index([saleId])
+  @@map("payments")
+}
+
+// Sổ công nợ (ledger) — append-only, nguồn sự thật để truy vết số dư.
+model CustomerLedger {
+  id           String          @id @default(uuid()) @db.Uuid
+  customerId   String          @db.Uuid
+  entryType    LedgerEntryType
+  refType      String? // "sale" | "payment"
+  refId        String?         @db.Uuid
+  debit        BigInt          @default(0) // tăng nợ
+  credit       BigInt          @default(0) // giảm nợ
+  balanceAfter BigInt // số dư sau bút toán
+  note         String?
+  createdById  String?         @db.Uuid
+  createdAt    DateTime        @default(now())
+
+  customer  Customer @relation(fields: [customerId], references: [id])
+  createdBy User?    @relation(fields: [createdById], references: [id])
+
+  @@index([customerId, createdAt])
+  @@map("customer_ledger")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  actorId   String?  @db.Uuid
+  action    String // "sale.create", "payment.create", "user.role.change"...
+  entity    String
+  entityId  String?
+  changes   Json?
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

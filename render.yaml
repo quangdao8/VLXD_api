@@ -1,0 +1,36 @@
+# Render Blueprint — deploy backend NestJS + Neon (tối ưu chi phí, plan free).
+# DB dùng Neon (ngoài Render) nên KHÔNG khai báo database ở đây.
+services:
+  - type: web
+    name: vlxd-backend
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    rootDir: Be
+    buildCommand: npm ci && npx prisma generate && npm run build
+    # Free plan không có preDeployCommand -> chạy migrate ngay trước khi start.
+    startCommand: npx prisma migrate deploy && node dist/main
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      # Dán chuỗi Neon vào Render Dashboard (Environment) — sync:false = nhập tay, không commit.
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      # Render tự sinh secret ngẫu nhiên.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_TTL
+        value: 15m
+      - key: JWT_REFRESH_TTL
+        value: 30d
